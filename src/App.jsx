@@ -1,0 +1,576 @@
+import { useState, useMemo, useRef, useEffect } from "react";
+import { calcCurve } from "./utils/math";
+import PlanDrawing from "./components/PlanDrawing";
+import ElevationDrawing from "./components/ElevationDrawing";
+import SectionDrawing from "./components/SectionDrawing";
+import ExportSheet from "./components/ExportSheet";
+import Logo from "./components/Logo";
+import AdminDashboard from "./components/AdminDashboard";
+import { useAuth } from "./context/AuthContext";
+import html2canvas from "html2canvas";
+import jsPDF from "jspdf";
+
+const BRAND = {
+  navy: "#06001A", navyLight: "#0F0826", purple: "#793494", magenta: "#9d20d6",
+  lavender: "#c89dd9", cream: "#F5EFE6", line: "#2A1F3D",
+  amber: "#E5B454", green: "#7BC474", red: "#E26464", wall: "#8B7355"
+};
+const FRAUNCES = "'Fraunces', Georgia, serif";
+const MANROPE = "'Manrope', system-ui, sans-serif";
+const MONO = "'JetBrains Mono', ui-monospace, monospace";
+const FT_TO_MM = 304.8;
+
+function num(n, d = 0) {
+  if (!isFinite(n)) return "—";
+  return Number(n).toLocaleString(undefined, { maximumFractionDigits: d, minimumFractionDigits: d });
+}
+
+function isValidEmail(email) {
+  if (!email) return false;
+  const re = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  return re.test(email);
+}
+
+function Field({ label, unit, children, hint }) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+      <label style={{ fontSize: 11, letterSpacing: 1.2, textTransform: "uppercase", color: BRAND.lavender, fontFamily: MANROPE, fontWeight: 600 }}>
+        {label} {unit && <span style={{ opacity: 0.5 }}>({unit})</span>}
+      </label>
+      {children}
+      {hint && <div style={{ fontSize: 11, color: BRAND.lavender, opacity: 0.6, fontFamily: MANROPE }}>{hint}</div>}
+    </div>
+  );
+}
+
+function NumInput({ value, onChange, min, max, step = 1 }) {
+  return (
+    <input type="number" value={value} min={min} max={max} step={step}
+      onChange={(e) => onChange(parseFloat(e.target.value) || 0)}
+      style={{ background: BRAND.navy, border: `1px solid ${BRAND.line}`, color: BRAND.cream, padding: "10px 12px", fontFamily: MONO, fontSize: 14, borderRadius: 6, outline: "none", width: "100%", boxSizing: "border-box" }} />
+  );
+}
+
+function Pill({ active, onClick, children }) {
+  return (
+    <button onClick={onClick}
+      style={{ background: active ? BRAND.purple : "transparent", color: active ? BRAND.cream : BRAND.lavender, border: `1px solid ${active ? BRAND.purple : BRAND.line}`, padding: "8px 14px", borderRadius: 999, fontFamily: MANROPE, fontWeight: 600, fontSize: 12, letterSpacing: 0.8, textTransform: "uppercase", cursor: "pointer", transition: "all 0.15s" }}>
+      {children}
+    </button>
+  );
+}
+
+function Metric({ label, value, unit, accent, sub }) {
+  return (
+    <div style={{ borderTop: `1px solid ${BRAND.line}`, padding: "14px 0" }}>
+      <div style={{ fontSize: 10, letterSpacing: 1.4, textTransform: "uppercase", color: BRAND.lavender, opacity: 0.7, fontFamily: MANROPE, fontWeight: 600 }}>{label}</div>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 6, marginTop: 4 }}>
+        <span style={{ fontFamily: FRAUNCES, fontSize: 26, fontWeight: 500, color: accent || BRAND.cream, lineHeight: 1 }}>{value}</span>
+        {unit && <span style={{ fontFamily: MONO, fontSize: 12, color: BRAND.lavender, opacity: 0.7 }}>{unit}</span>}
+      </div>
+      {sub && <div style={{ fontFamily: MONO, fontSize: 11, color: BRAND.lavender, opacity: 0.6, marginTop: 4 }}>{sub}</div>}
+    </div>
+  );
+}
+
+function Panel({ children, accent, style }) {
+  return (
+    <div style={{ background: BRAND.navyLight, border: `1px solid ${BRAND.line}`, borderLeft: accent ? `3px solid ${accent}` : `1px solid ${BRAND.line}`, borderRadius: 12, padding: 20, ...style }}>
+      {children}
+    </div>
+  );
+}
+
+export default function CurvedLEDCalculator() {
+  const { user, logout, trackEvent } = useAuth();
+  const [showDashboard, setShowDashboard] = useState(false);
+  const [chord, setChord] = useState(4877);
+  const [screenW, setScreenW] = useState(2880);
+  const [screenH, setScreenH] = useState(2880);
+  const [screenPos, setScreenPos] = useState("center");
+  const [cabW, setCabW] = useState(480);
+  const [cabH, setCabH] = useState(960);
+  const [modW, setModW] = useState(160);
+  const [modH, setModH] = useState(320);
+  const [pitch, setPitch] = useState(5);
+  const [viewDist, setViewDist] = useState(8000);
+  const [curveMode, setCurveMode] = useState("preset");
+  const [sagitta, setSagitta] = useState(457);
+  const [radiusIn, setRadiusIn] = useState(6700);
+  const [preset, setPreset] = useState("signature");
+  const [cabWeight, setCabWeight] = useState(14);
+  const [curveType, setCurveType] = useState("outer");
+  const [presenter, setPresenter] = useState(false);
+  const [stageTab, setStageTab] = useState("plan");
+  const [projectName, setProjectName] = useState("");
+  const [showClientForm, setShowClientForm] = useState(false);
+  const [clientData, setClientData] = useState({ clientName: "", projectRef: "", contactEmail: "" });
+  const [isGeneratingPDF, setIsGeneratingPDF] = useState(false);
+  const [emailError, setEmailError] = useState("");
+  const printRef = useRef(null);
+
+  useEffect(() => {
+    if (user) {
+      trackEvent("session_start");
+    }
+  }, [user]);
+
+  const calc = useMemo(() => {
+    return calcCurve(chord, screenW, screenH, screenPos, cabW, cabH, modW, modH, pitch, curveMode, sagitta, radiusIn, preset, cabWeight, curveType);
+  }, [chord, screenW, screenH, screenPos, cabW, cabH, modW, modH, pitch, curveMode, sagitta, radiusIn, preset, cabWeight, curveType]);
+
+  const today = new Date().toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" });
+  const presets = [
+    { key: "subtle", label: "Subtle", desc: "R = 5× width" },
+    { key: "signature", label: "Signature", desc: "R = 2.5× width" },
+    { key: "wrap", label: "Wrap", desc: "R = 1.3× width" },
+    { key: "cylinder", label: "Cylinder", desc: "R = 0.8× width" }
+  ];
+  const stageTabs = [{ k: "plan", l: "Plan" }, { k: "elevation", l: "Elevation" }, { k: "section", l: "Section" }];
+
+  const headerBtn = (active) => ({
+    background: active ? BRAND.magenta : "transparent", color: active ? BRAND.cream : BRAND.lavender,
+    border: `1px solid ${active ? BRAND.magenta : BRAND.line}`, padding: "9px 16px", borderRadius: 999,
+    fontFamily: MANROPE, fontWeight: 700, fontSize: 12, letterSpacing: 0.8, textTransform: "uppercase",
+    cursor: "pointer", transition: "all 0.15s"
+  });
+
+  const handleExportPDF = async () => {
+    setEmailError("");
+    trackEvent("pdf_export", { chord, screenW, screenH, pitch, curveType });
+    setShowClientForm(true);
+  };
+
+  const validateClientForm = () => {
+    if (!clientData.clientName.trim()) {
+      setEmailError("Client name is required");
+      return false;
+    }
+    if (!clientData.contactEmail.trim()) {
+      setEmailError("Contact email is required");
+      return false;
+    }
+    if (!isValidEmail(clientData.contactEmail)) {
+      setEmailError("Please enter a valid email address (e.g., name@company.com)");
+      return false;
+    }
+    setEmailError("");
+    return true;
+  };
+
+  const confirmExport = async () => {
+    if (!validateClientForm()) return;
+
+    setIsGeneratingPDF(true);
+    try {
+      const element = printRef.current;
+      if (!element) {
+        setEmailError("Print template not found. Please refresh the page.");
+        setIsGeneratingPDF(false);
+        return;
+      }
+
+      const originalDisplay = element.style.display;
+      const originalPosition = element.style.position;
+      element.style.display = "block";
+      element.style.position = "absolute";
+      element.style.left = "-9999px";
+      element.style.top = "0";
+      element.style.width = "210mm";
+      element.style.padding = "15mm";
+      element.style.boxSizing = "border-box";
+
+      const canvas = await html2canvas(element, {
+        scale: 2,
+        backgroundColor: "#ffffff",
+        useCORS: true,
+        logging: false,
+        windowWidth: 794,
+      });
+
+      element.style.display = originalDisplay;
+      element.style.position = originalPosition;
+      element.style.left = "";
+      element.style.top = "";
+      element.style.width = "";
+      element.style.padding = "";
+      element.style.boxSizing = "";
+
+      const imgData = canvas.toDataURL("image/png");
+      const pdf = new jsPDF("p", "mm", "a4");
+      const pdfWidth = pdf.internal.pageSize.getWidth();
+      const pdfHeight = pdf.internal.pageSize.getHeight();
+      const imgWidth = canvas.width;
+      const imgHeight = canvas.height;
+      const ratio = pdfWidth / imgWidth;
+      const scaledHeight = imgHeight * ratio;
+
+      let heightLeft = scaledHeight;
+      let position = 0;
+      let pageHeight = pdfHeight;
+
+      pdf.addImage(imgData, "PNG", 0, position, pdfWidth, scaledHeight);
+      heightLeft -= pageHeight;
+
+      while (heightLeft > 0) {
+        position = heightLeft - scaledHeight;
+        pdf.addPage();
+        pdf.addImage(imgData, "PNG", 0, position, pdfWidth, scaledHeight);
+        heightLeft -= pageHeight;
+      }
+
+      pdf.save(`${projectName || "curved-led-spec"}.pdf`);
+      setShowClientForm(false);
+    } catch (err) {
+      console.error("PDF generation failed:", err);
+      setEmailError("PDF generation failed. Please try again.");
+    } finally {
+      setIsGeneratingPDF(false);
+    }
+  };
+
+  if (showDashboard) {
+    return <AdminDashboard onBack={() => setShowDashboard(false)} />;
+  }
+
+  return (
+    <>
+      <div className="vr-screen" style={{ background: BRAND.navy, color: BRAND.cream, minHeight: "100vh", fontFamily: MANROPE, boxSizing: "border-box" }}>
+
+        <div style={{ position: "sticky", top: 0, zIndex: 50, background: `${BRAND.navy}E6`, backdropFilter: "blur(10px)", borderBottom: `1px solid ${BRAND.line}` }}>
+          <div style={{ maxWidth: 1480, margin: "0 auto", padding: "14px 22px", display: "flex", alignItems: "center", gap: 18, flexWrap: "wrap" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 12, marginRight: "auto" }}>
+              <Logo size={36} />
+              <div>
+                <div style={{ fontSize: 10, letterSpacing: 3, color: BRAND.magenta, fontWeight: 700, textTransform: "uppercase" }}>Visual Rhyme · Engineering</div>
+                <div style={{ fontFamily: FRAUNCES, fontSize: 24, fontWeight: 600, lineHeight: 1, marginTop: 3 }}>
+                  Curved LED <em style={{ color: BRAND.lavender }}>Control Room</em>
+                </div>
+              </div>
+            </div>
+
+            <input value={projectName} onChange={(e) => setProjectName(e.target.value)} placeholder="Project name (for PDF)"
+              style={{ background: BRAND.navyLight, border: `1px solid ${BRAND.line}`, color: BRAND.cream, padding: "9px 12px", fontFamily: MANROPE, fontSize: 13, borderRadius: 8, outline: "none", width: 190 }} />
+
+            <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={() => setCurveType("outer")} style={headerBtn(curveType === "outer")}>Outer</button>
+              <button onClick={() => setCurveType("inner")} style={headerBtn(curveType === "inner")}>Inner</button>
+            </div>
+
+            <button onClick={() => setPresenter(p => !p)} style={{ ...headerBtn(presenter), borderColor: BRAND.amber, color: presenter ? BRAND.navy : BRAND.amber, background: presenter ? BRAND.amber : "transparent" }}>
+              {presenter ? "● Presenter" : "Presenter Mode"}
+            </button>
+
+            <button onClick={handleExportPDF} style={{ ...headerBtn(false), background: BRAND.purple, borderColor: BRAND.purple, color: BRAND.cream }}>
+              ⤓ Export PDF
+            </button>
+
+            <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 12 }}>
+              <div style={{ fontSize: 12, color: BRAND.lavender, fontFamily: MANROPE }}>
+                {user?.name} · {user?.type === "trial" ? "Trial" : "Full"}
+              </div>
+              <button
+                onClick={() => setShowDashboard(true)}
+                style={{ background: "transparent", color: BRAND.amber, border: `1px solid ${BRAND.amber}`, padding: "6px 12px", fontFamily: MANROPE, fontWeight: 600, fontSize: 11, borderRadius: 6, cursor: "pointer" }}
+              >
+                Dashboard
+              </button>
+              <button
+                onClick={() => { logout(); window.location.reload(); }}
+                style={{ background: "transparent", color: BRAND.red, border: `1px solid ${BRAND.red}`, padding: "6px 12px", fontFamily: MANROPE, fontWeight: 600, fontSize: 11, borderRadius: 6, cursor: "pointer" }}
+              >
+                Logout
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div style={{ maxWidth: 1480, margin: "0 auto", padding: 22 }}>
+          <div className={`vr-cockpit${presenter ? " presenter" : ""}`}>
+
+            {!presenter && (
+              <div className="vr-scroll" style={{ position: "sticky", top: 86, maxHeight: "calc(100vh - 110px)", overflowY: "auto", paddingRight: 4 }}>
+                <Panel>
+                  <h2 style={{ fontFamily: FRAUNCES, fontSize: 20, margin: "0 0 2px" }}>Inputs</h2>
+                  <div style={{ fontSize: 11, color: BRAND.lavender, opacity: 0.7, marginBottom: 18 }}>All dimensions in millimeters</div>
+
+                  <div style={{ marginBottom: 22 }}>
+                    <div style={{ fontSize: 10, letterSpacing: 2, color: BRAND.magenta, textTransform: "uppercase", fontWeight: 700, marginBottom: 10 }}>1 · Curve Geometry</div>
+                    <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
+                      <Pill active={curveMode === "preset"} onClick={() => setCurveMode("preset")}>Preset</Pill>
+                      <Pill active={curveMode === "sagitta"} onClick={() => setCurveMode("sagitta")}>Sagitta</Pill>
+                      <Pill active={curveMode === "radius"} onClick={() => setCurveMode("radius")}>Radius</Pill>
+                    </div>
+                    <Field label="Chord (total width)" unit="mm" hint={`= ${num(chord / FT_TO_MM, 2)} ft`}>
+                      <NumInput value={chord} onChange={setChord} min={500} max={20000} step={10} />
+                    </Field>
+                    {curveMode === "preset" && (
+                      <div style={{ marginTop: 14 }}>
+                        <Field label="Curve Intent">
+                          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                            {presets.map(p => (
+                              <button key={p.key} onClick={() => setPreset(p.key)} style={{ background: preset === p.key ? BRAND.purple : BRAND.navy, color: preset === p.key ? BRAND.cream : BRAND.lavender, border: `1px solid ${preset === p.key ? BRAND.purple : BRAND.line}`, borderRadius: 6, padding: "10px 8px", cursor: "pointer", fontFamily: MANROPE, fontSize: 13 }}>
+                                <div style={{ fontWeight: 700 }}>{p.label}</div>
+                                <div style={{ fontSize: 10, opacity: 0.7, fontFamily: MONO, marginTop: 2 }}>{p.desc}</div>
+                              </button>
+                            ))}
+                          </div>
+                        </Field>
+                      </div>
+                    )}
+                    {curveMode === "sagitta" && (
+                      <div style={{ marginTop: 14 }}>
+                        <Field label={`Sagitta (${curveType === "outer" ? "bulge out" : "depth in"})`} unit="mm" hint={`= ${num(sagitta / FT_TO_MM, 2)} ft`}>
+                          <NumInput value={sagitta} onChange={setSagitta} min={10} max={chord / 2} step={5} />
+                        </Field>
+                      </div>
+                    )}
+                    {curveMode === "radius" && (
+                      <div style={{ marginTop: 14 }}>
+                        <Field label="Radius" unit="mm" hint={`= ${num(radiusIn / 1000, 2)} m`}>
+                          <NumInput value={radiusIn} onChange={setRadiusIn} min={500} max={50000} step={50} />
+                        </Field>
+                      </div>
+                    )}
+                  </div>
+
+                  <div style={{ marginBottom: 22 }}>
+                    <div style={{ fontSize: 10, letterSpacing: 2, color: BRAND.magenta, textTransform: "uppercase", fontWeight: 700, marginBottom: 10 }}>2 · Screen Dimensions</div>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                      <Field label="Screen W" unit="mm" hint={`${num(screenW / FT_TO_MM, 2)} ft`}>
+                        <NumInput value={screenW} onChange={setScreenW} min={100} max={chord} step={10} />
+                      </Field>
+                      <Field label="Screen H" unit="mm" hint={`${num(screenH / FT_TO_MM, 2)} ft`}>
+                        <NumInput value={screenH} onChange={setScreenH} min={100} max={10000} step={10} />
+                      </Field>
+                    </div>
+                    <div style={{ marginTop: 12 }}>
+                      <Field label="Screen Position on Chord">
+                        <div style={{ display: "flex", gap: 8 }}>
+                          <Pill active={screenPos === "left"} onClick={() => setScreenPos("left")}>Left</Pill>
+                          <Pill active={screenPos === "center"} onClick={() => setScreenPos("center")}>Center</Pill>
+                          <Pill active={screenPos === "right"} onClick={() => setScreenPos("right")}>Right</Pill>
+                        </div>
+                      </Field>
+                    </div>
+                  </div>
+
+                  <div style={{ marginBottom: 22 }}>
+                    <div style={{ fontSize: 10, letterSpacing: 2, color: BRAND.magenta, textTransform: "uppercase", fontWeight: 700, marginBottom: 10 }}>3 · Cabinet & Module</div>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
+                      <Field label="Cabinet W" unit="mm"><NumInput value={cabW} onChange={setCabW} min={100} max={2000} step={10} /></Field>
+                      <Field label="Cabinet H" unit="mm"><NumInput value={cabH} onChange={setCabH} min={100} max={2000} step={10} /></Field>
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                      <Field label="Module W" unit="mm" hint="vertical = 160"><NumInput value={modW} onChange={setModW} min={50} max={500} step={10} /></Field>
+                      <Field label="Module H" unit="mm" hint="vertical = 320"><NumInput value={modH} onChange={setModH} min={50} max={500} step={10} /></Field>
+                    </div>
+                    <div style={{ marginTop: 12 }}>
+                      <Field label="Cabinet weight" unit="kg" hint="outdoor diecast 12–18 kg">
+                        <NumInput value={cabWeight} onChange={setCabWeight} min={3} max={50} step={0.5} />
+                      </Field>
+                    </div>
+                  </div>
+
+                  <div>
+                    <div style={{ fontSize: 10, letterSpacing: 2, color: BRAND.magenta, textTransform: "uppercase", fontWeight: 700, marginBottom: 10 }}>4 · Pitch & Viewing</div>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                      <Field label="Pixel Pitch" unit="mm"><NumInput value={pitch} onChange={setPitch} min={1} max={20} step={0.01} /></Field>
+                      <Field label="View Distance" unit="mm" hint={`${num(viewDist / 1000, 1)} m`}>
+                        <NumInput value={viewDist} onChange={setViewDist} min={500} max={100000} step={100} />
+                      </Field>
+                    </div>
+                    <div style={{ marginTop: 10, fontSize: 12, color: BRAND.lavender, fontFamily: MONO }}>
+                      Min viewing: <span style={{ color: BRAND.amber }}>~{num(pitch, 1)} m</span> · Optimal: <span style={{ color: BRAND.amber }}>~{num(pitch * 2.5, 1)} m</span> · Set: {num(viewDist / 1000, 1)} m
+                      {viewDist / 1000 < pitch * 0.6 && <div style={{ color: BRAND.red, marginTop: 4 }}>⚠ Too close — pixels visible.</div>}
+                      {viewDist / 1000 > pitch * 4 && <div style={{ color: BRAND.amber, marginTop: 4 }}>ℹ Coarser pitch acceptable.</div>}
+                    </div>
+                  </div>
+                </Panel>
+              </div>
+            )}
+
+            <div style={{ display: "flex", flexDirection: "column", gap: 18, minWidth: 0 }}>
+              <div style={{ position: "relative", borderRadius: 16, overflow: "hidden", border: `1px solid ${BRAND.line}`, background: BRAND.navyLight }}>
+                <div style={{ position: "absolute", inset: 0, background: `radial-gradient(circle at 50% 40%, ${BRAND.magenta}26 0%, transparent 60%)`, pointerEvents: "none" }} />
+                <div style={{ position: "relative", display: "flex", gap: 8, padding: "14px 16px 0", flexWrap: "wrap" }}>
+                  {stageTabs.map(t => (
+                    <button key={t.k} onClick={() => setStageTab(t.k)} style={headerBtn(stageTab === t.k)}>{t.l}</button>
+                  ))}
+                  <div style={{ marginLeft: "auto", alignSelf: "center", fontFamily: MONO, fontSize: 11, color: BRAND.lavender, opacity: 0.7 }}>
+                    {curveType === "outer" ? "OUTER · CONVEX" : "INNER · CONCAVE"}
+                  </div>
+                </div>
+                <div style={{ position: "relative", padding: 16 }}>
+                  {stageTab === "plan" && <PlanDrawing chord={chord} R={calc.R} sag={calc.sag} screenW={screenW} screenStart={calc.screenStart} cabCountW={Math.round(calc.cabCountW)} curveType={curveType} />}
+                  {stageTab === "elevation" && <ElevationDrawing screenW={screenW} screenH={screenH} cabCountW={Math.round(calc.cabCountW)} cabCountH={Math.round(calc.cabCountH)} modPerCabW={Math.round(calc.modPerCabW)} modPerCabH={Math.round(calc.modPerCabH)} />}
+                  {stageTab === "section" && (
+                    <div style={{ maxWidth: 420, margin: "0 auto" }}><SectionDrawing sag={calc.sag} curveType={curveType} /></div>
+                  )}
+                </div>
+              </div>
+
+              <div style={{ background: `linear-gradient(90deg, ${calc.verdictColor}22 0%, transparent 100%)`, border: `1px solid ${calc.verdictColor}`, borderRadius: 12, padding: 18, display: "flex", gap: 18, alignItems: "center", flexWrap: "wrap" }}>
+                <div style={{ minWidth: 120 }}>
+                  <div style={{ fontSize: 11, letterSpacing: 1.5, color: BRAND.lavender, textTransform: "uppercase" }}>Curve Verdict</div>
+                  <div style={{ fontFamily: FRAUNCES, fontSize: 28, fontWeight: 600, color: calc.verdictColor, marginTop: 2 }}>{calc.verdict}</div>
+                </div>
+                <div style={{ flex: 1, minWidth: 220, fontSize: 14, lineHeight: 1.5, color: BRAND.cream }}>
+                  <strong style={{ color: calc.verdictColor }}>Per-joint gap: {num(calc.gapPerJoint, 1)} mm</strong> · Wedge angle: {num(calc.cabAngleDeg, 2)}°<br />
+                  <span style={{ opacity: 0.85 }}>{calc.advice}</span>
+                </div>
+              </div>
+
+              {!calc.cleanFit && (
+                <div style={{ background: `${BRAND.red}1A`, border: `1px solid ${BRAND.red}`, borderRadius: 12, padding: "14px 18px", fontSize: 13, color: BRAND.cream }}>
+                  <strong style={{ color: BRAND.red }}>⚠ Cabinets do not divide evenly</strong> — {num(calc.cabCountW, 2)} × {num(calc.cabCountH, 2)}. Quantities below are rounded up to whole cabinets; adjust screen or cabinet size for a clean fit.
+                </div>
+              )}
+
+              <Panel accent={BRAND.amber}>
+                <div style={{ fontSize: 10, letterSpacing: 2, color: BRAND.amber, textTransform: "uppercase", fontWeight: 700, marginBottom: 6 }}>
+                  Mounting Strategy · {curveType === "outer" ? "Outer Curve" : "Inner Curve"}
+                </div>
+                <h3 style={{ fontFamily: FRAUNCES, fontSize: 22, margin: "0 0 12px", fontWeight: 500 }}>{calc.structuralStrategy}</h3>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: 10 }}>
+                  <div style={{ padding: 12, background: BRAND.navy, borderRadius: 6 }}>
+                    <div style={{ fontSize: 10, color: BRAND.lavender, opacity: 0.7, letterSpacing: 1.2, textTransform: "uppercase" }}>Cantilever @ center</div>
+                    <div style={{ fontFamily: FRAUNCES, fontSize: 22, color: BRAND.green, marginTop: 4 }}>{num(calc.cantileverAtCenter, 0)} mm</div>
+                  </div>
+                  <div style={{ padding: 12, background: BRAND.navy, borderRadius: 6 }}>
+                    <div style={{ fontSize: 10, color: BRAND.lavender, opacity: 0.7, letterSpacing: 1.2, textTransform: "uppercase" }}>Anchor zone</div>
+                    <div style={{ fontFamily: FRAUNCES, fontSize: 15, color: BRAND.amber, marginTop: 4 }}>{calc.wallContactAtEnds}</div>
+                  </div>
+                  <div style={{ padding: 12, background: BRAND.navy, borderRadius: 6 }}>
+                    <div style={{ fontSize: 10, color: BRAND.lavender, opacity: 0.7, letterSpacing: 1.2, textTransform: "uppercase" }}>Steel weight</div>
+                    <div style={{ fontFamily: FRAUNCES, fontSize: 22, color: BRAND.cream, marginTop: 4 }}>~{num(calc.steelWeightKg, 0)} kg</div>
+                  </div>
+                </div>
+                <p style={{ fontSize: 13, lineHeight: 1.6, color: BRAND.cream, opacity: 0.85, marginTop: 14 }}>
+                  {curveType === "outer"
+                    ? "Wind load is critical for outer curves. Higher sagitta = larger wind moment at wall anchors. Use chemical anchors M16+ at chord endpoints, with diagonal back-bracing for sag > 500mm."
+                    : "Inner curves distribute load along full back face. Requires recessed mounting zone in wall."}
+                </p>
+                <p style={{ fontSize: 11, lineHeight: 1.5, color: BRAND.amber, opacity: 0.7, marginTop: 12, fontStyle: "italic", borderTop: `1px dashed ${BRAND.line}`, paddingTop: 10 }}>
+                  Pre-engineering estimates for scoping only. Final structural design, anchor specification and wind-load verification must be stamped by a licensed structural engineer per local code (IS 875 Part 3 for wind in India).
+                </p>
+              </Panel>
+            </div>
+
+            <div className="vr-scroll" style={{ position: "sticky", top: 86, maxHeight: "calc(100vh - 110px)", overflowY: "auto", paddingRight: 4 }}>
+              <Panel>
+                <h2 style={{ fontFamily: FRAUNCES, fontSize: 20, margin: "0 0 2px" }}>Computed</h2>
+                <div style={{ fontSize: 11, color: BRAND.lavender, opacity: 0.7, marginBottom: 8 }}>Live geometry & quantities</div>
+                <Metric label="Radius (R)" value={num(calc.R / 1000, 2)} unit="m" accent={BRAND.amber} sub={`= ${num(calc.R, 0)} mm`} />
+                <Metric label={`Sagitta · ${curveType === "outer" ? "cantilever from wall" : "depth into wall"}`} value={num(calc.sag, 0)} unit="mm" sub={`= ${num(calc.sag / FT_TO_MM, 2)} ft`} />
+                <Metric label="Cabinets (W × H)" value={`${num(calc.cabCountW, calc.cabFitW ? 0 : 2)} × ${num(calc.cabCountH, calc.cabFitH ? 0 : 2)}`} accent={calc.cleanFit ? BRAND.green : BRAND.red} sub={calc.cleanFit ? `${calc.totalCabs} total · clean fit ✓` : "⚠ Adjust screen or cabinet size"} />
+                <Metric label="Pixel Resolution" value={`${num(calc.pxScreenW)} × ${num(calc.pxScreenH)}`} sub={`${num(calc.totalPixels)} pixels · pitch ${pitch}mm`} />
+                <Metric label="Recommended Supply" value={num(calc.recommendedSupply)} unit="kW" accent={BRAND.magenta} sub="Max × 1.25 safety margin" />
+
+                {!presenter && (
+                  <>
+                    <div style={{ height: 10 }} />
+                    <Metric label="Screen Arc Length" value={num(calc.screenArcLen, 0)} unit="mm" sub={`Full chord arc = ${num(calc.totalArcLen, 0)} mm`} />
+                    <Metric label="Modules per Cabinet" value={`${num(calc.modPerCabW, calc.modFitW ? 0 : 2)} × ${num(calc.modPerCabH, calc.modFitH ? 0 : 2)}`} accent={calc.modFitW && calc.modFitH ? BRAND.green : BRAND.red} sub={calc.modFitW && calc.modFitH ? `${calc.modPerCab} mods/cab · ${num(calc.totalMods)} modules` : "⚠ Module mismatch"} />
+                    <Metric label="Per-Cabinet Wedge Angle" value={num(calc.cabAngleDeg, 2)} unit="°" sub="Angle between adjacent cabinet faces" />
+                    <Metric label="Per-Joint Back Gap" value={num(calc.gapPerJoint, 1)} unit="mm" accent={calc.verdictColor} sub="Wedge spacer / foam fills this" />
+                    <Metric label="Total Screen Weight" value={num(calc.totalWeight, 0)} unit="kg" sub={`Cabinets only · ${num(cabWeight)} kg each${calc.cleanFit ? "" : " · cabinets rounded up"}`} />
+                    <Metric label="Steel Structure (est.)" value={`~${num(calc.steelWeightKg, 0)}`} unit="kg" sub={`${calc.vertPosts} posts × ${calc.horizRails} arc rails ${curveType === "outer" ? "+ struts" : ""}${calc.cleanFit ? "" : " · cabinets rounded up"}`} />
+                    <Metric label="Avg Power" value={num(calc.avgPower / 1000, 2)} unit="kW" sub={`Max: ${num(calc.maxPower / 1000, 2)} kW${calc.cleanFit ? "" : " · cabinets rounded up"}`} />
+                  </>
+                )}
+
+                <div style={{ marginTop: 16, padding: 12, background: BRAND.navy, borderRadius: 8, fontSize: 11, color: BRAND.lavender, opacity: 0.7, fontFamily: MONO, lineHeight: 1.5 }}>
+                  {presenter ? "Presenter mode · client view. Toggle off for full engineering detail." : "Tip: Export PDF generates a clean client spec sheet."}
+                </div>
+              </Panel>
+            </div>
+
+          </div>
+
+          <div style={{ textAlign: "center", padding: "24px 0 8px", borderTop: `1px solid ${BRAND.line}`, marginTop: 22 }}>
+            <div style={{ fontFamily: MONO, fontSize: 10, color: BRAND.lavender, opacity: 0.5, letterSpacing: 1.5 }}>
+              VISUAL RHYME · CURVED LED CONTROL ROOM · v4 · {new Date().getFullYear()}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <ExportSheet ref={printRef} projectName={projectName} today={today} calc={calc} chord={chord} screenW={screenW} screenH={screenH} pitch={pitch} cabW={cabW} cabH={cabH} curveType={curveType} cabWeight={cabWeight} clientData={clientData} />
+
+      {showClientForm && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 100 }}>
+          <div style={{ background: BRAND.navyLight, border: `1px solid ${BRAND.line}`, borderRadius: 16, padding: 32, width: 400, maxWidth: "90vw" }}>
+            <h3 style={{ fontFamily: FRAUNCES, fontSize: 22, marginBottom: 20, color: BRAND.cream }}>Client Details</h3>
+            <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+              <Field label="Client Name">
+                <input
+                  value={clientData.clientName}
+                  onChange={e => { setClientData(p => ({...p, clientName: e.target.value})); setEmailError(""); }}
+                  placeholder="Enter client name"
+                  style={{ background: BRAND.navy, border: `1px solid ${BRAND.line}`, color: BRAND.cream, padding: "10px 12px", fontFamily: MANROPE, fontSize: 14, borderRadius: 6, outline: "none", width: "100%", boxSizing: "border-box" }}
+                />
+              </Field>
+              <Field label="Project Reference">
+                <input
+                  value={clientData.projectRef}
+                  onChange={e => setClientData(p => ({...p, projectRef: e.target.value}))}
+                  placeholder="e.g., VR-2024-001"
+                  style={{ background: BRAND.navy, border: `1px solid ${BRAND.line}`, color: BRAND.cream, padding: "10px 12px", fontFamily: MANROPE, fontSize: 14, borderRadius: 6, outline: "none", width: "100%", boxSizing: "border-box" }}
+                />
+              </Field>
+              <Field label="Contact Email">
+                <input
+                  type="email"
+                  value={clientData.contactEmail}
+                  onChange={e => { setClientData(p => ({...p, contactEmail: e.target.value})); setEmailError(""); }}
+                  placeholder="name@company.com"
+                  style={{
+                    background: BRAND.navy,
+                    border: `1px solid ${emailError && !isValidEmail(clientData.contactEmail) ? BRAND.red : BRAND.line}`,
+                    color: BRAND.cream,
+                    padding: "10px 12px",
+                    fontFamily: MANROPE,
+                    fontSize: 14,
+                    borderRadius: 6,
+                    outline: "none",
+                    width: "100%",
+                    boxSizing: "border-box",
+                  }}
+                />
+              </Field>
+              {emailError && (
+                <div style={{ fontSize: 12, color: BRAND.red, fontFamily: MANROPE, marginTop: -8 }}>
+                  ⚠ {emailError}
+                </div>
+              )}
+            </div>
+            <div style={{ display: "flex", gap: 12, marginTop: 24, justifyContent: "flex-end" }}>
+              <button
+                onClick={() => { setShowClientForm(false); setEmailError(""); }}
+                disabled={isGeneratingPDF}
+                style={{ ...headerBtn(false), padding: "10px 20px", opacity: isGeneratingPDF ? 0.5 : 1, cursor: isGeneratingPDF ? "not-allowed" : "pointer" }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmExport}
+                disabled={isGeneratingPDF}
+                style={{
+                  ...headerBtn(true),
+                  background: BRAND.purple,
+                  borderColor: BRAND.purple,
+                  padding: "10px 20px",
+                  opacity: isGeneratingPDF ? 0.7 : 1,
+                  cursor: isGeneratingPDF ? "wait" : "pointer",
+                }}
+              >
+                {isGeneratingPDF ? "Generating PDF..." : "Generate PDF"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}

@@ -1,0 +1,54 @@
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+  --navy: #06001A;
+  --navy-light: #0F0826;
+  --purple: #793494;
+  --magenta: #9d20d6;
+  --lavender: #c89dd9;
+  --cream: #F5EFE6;
+  --line: #2A1F3D;
+  --amber: #E5B454;
+  --green: #7BC474;
+  --red: #E26464;
+  --wall: #8B7355;
+}
+
+body {
+  background: var(--navy);
+  color: var(--cream);
+  font-family: 'Manrope', system-ui, sans-serif;
+  min-height: 100vh;
+}
+
+.fraunces { font-family: 'Fraunces', Georgia, serif; }
+.mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
+
+.vr-cockpit {
+  display: grid;
+  grid-template-columns: 320px minmax(0, 1fr) 348px;
+  gap: 18px;
+  align-items: start;
+}
+
+.vr-cockpit.presenter {
+  grid-template-columns: minmax(0, 1fr) 372px;
+}
+
+@media (max-width: 1180px) {
+  .vr-cockpit, .vr-cockpit.presenter {
+    grid-template-columns: 1fr;
+  }
+}
+
+.vr-print { display: none; }
+
+@media print {
+  .vr-screen { display: none !important; }
+  .vr-print { display: block !important; }
+  @page { size: A4 portrait; margin: 14mm; }
+  html, body { background: #ffffff !important; }
+}
+
+.vr-scroll::-webkit-scrollbar { width: 8px; }
+.vr-scroll::-webkit-scrollbar-thumb { background: var(--line); border-radius: 8px; }

@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.env
+*.log
+.DS_Store
+server/db/users.xml
+server/db/trials.xml
+server/db/analytics.xml
+.vscode/
+.idea/
